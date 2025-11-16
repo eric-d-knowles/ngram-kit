@@ -9,7 +9,7 @@ import time
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Optional, Set, Any
+from typing import Optional, Set, Any, Union
 
 from setproctitle import setproctitle
 
@@ -629,6 +629,10 @@ def build_processed_db(
     # Filter configuration parameters (used if filter_config not provided)
     stop_set: Optional[Set[str]] = None,
     lemma_gen: Any = None,
+    # Input whitelist configuration (used if filter_config not provided)
+    whitelist_path: Optional[Union[str, Path]] = None,
+    whitelist_min_count: int = 1,
+    whitelist_top_n: Optional[int] = None,
     # Pipeline execution parameters
     num_workers: Optional[int] = None,
     mode: Optional[str] = None,
@@ -647,7 +651,8 @@ def build_processed_db(
     ingest_batch_items: Optional[int] = None,
     ingest_queue_size: Optional[int] = None,
     compact_after_ingest: Optional[bool] = None,
-    # Whitelist generation
+    # Output whitelist generation
+    output_whitelist_path: Optional[Union[str, Path]] = "default",
     output_whitelist_top_n: Optional[int] = None,
     output_whitelist_year_range: Optional[tuple[int, int]] = None,
     output_whitelist_spell_check: bool = False,
@@ -669,6 +674,9 @@ def build_processed_db(
         db_path_stub: Base directory for database (will be expanded) - required if pipeline_config not provided
         stop_set: Set of stopwords to filter (used if filter_config not provided)
         lemma_gen: Lemmatizer instance (used if filter_config not provided)
+        whitelist_path: Path to input whitelist file (used if filter_config not provided)
+        whitelist_min_count: Minimum count threshold for whitelist tokens (default: 1)
+        whitelist_top_n: Limit to top N tokens from whitelist (used if filter_config not provided)
         num_workers: Number of parallel workers (default: cpu_count() - 1 or num_initial_work_units, whichever is lower)
         mode: "restart" (wipe all), "resume" (continue), or "reprocess" (wipe DB, keep cache)
         use_smart_partitioning: Use density-based partitioning for better load balancing
@@ -683,6 +691,7 @@ def build_processed_db(
         ingest_batch_items: Number of items per batch during ingestion
         ingest_queue_size: Max shards buffered in memory
         compact_after_ingest: Perform full compaction after ingestion
+        output_whitelist_path: Path for output whitelist file (None to disable generation)
         output_whitelist_top_n: Number of top tokens to include in whitelist
         output_whitelist_year_range: (start_year, end_year) filter for whitelist
         output_whitelist_spell_check: Only include correctly spelled words
@@ -694,10 +703,13 @@ def build_processed_db(
     # Construct FilterConfig if not provided
     if filter_config is None:
         # If filter parameters provided, use them; otherwise use defaults
-        if stop_set is not None or lemma_gen is not None:
+        if stop_set is not None or lemma_gen is not None or whitelist_path is not None:
             filter_config = FilterConfig(
                 stop_set=stop_set,
                 lemma_gen=lemma_gen,
+                whitelist_path=whitelist_path,
+                whitelist_min_count=whitelist_min_count,
+                whitelist_top_n=whitelist_top_n,
             )
         else:
             filter_config = FilterConfig()
@@ -736,7 +748,13 @@ def build_processed_db(
     src_db = Path(raw_db_path)
     dst_db = base_path / f"{ngram_size}grams_processed.db"
     tmp_dir = base_path / "processing_tmp"
-    whitelist_path = dst_db / "whitelist.txt"
+
+    # Set default output whitelist path only if not explicitly provided
+    # "default" means use the default path, None means don't generate
+    if output_whitelist_path == "default":
+        default_output_whitelist_path = dst_db / "whitelist.txt"
+    else:
+        default_output_whitelist_path = output_whitelist_path
 
     # Determine default num_workers if not specified
     if num_workers is None:
@@ -754,8 +772,11 @@ def build_processed_db(
         'dst_db': dst_db,
         'tmp_dir': tmp_dir,
         'num_workers': num_workers,
-        'output_whitelist_path': whitelist_path,
     }
+
+    # Only add output_whitelist_path if it's not explicitly None
+    if default_output_whitelist_path is not None:
+        config_kwargs['output_whitelist_path'] = default_output_whitelist_path
 
     # Add optional parameters only if explicitly provided
     optional_params = {

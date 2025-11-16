@@ -23,6 +23,20 @@ class ProgressTracker:
         """
         self.db_path = Path(db_path)
 
+    def _connect(self, timeout: float = 30.0) -> sqlite3.Connection:
+        """
+        Create a database connection with WAL mode enabled.
+
+        Args:
+            timeout: Database lock timeout in seconds
+
+        Returns:
+            SQLite connection
+        """
+        conn = sqlite3.connect(str(self.db_path), timeout=timeout)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
     def get_progress(self, num_workers: Optional[int] = None) -> WorkProgress:
         """
         Get current progress statistics.
@@ -33,7 +47,7 @@ class ProgressTracker:
         Returns:
             WorkProgress with current counts and active worker count
         """
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             # Count units that represent active/actual work:
             # - Leaf units (units not split): all statuses
             # - Parent units with status='completed'/'ingesting'/'ingested' (finished processing)

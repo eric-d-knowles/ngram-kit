@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import sqlite3
 import time
 from pathlib import Path
@@ -26,6 +27,21 @@ class WorkUnitStore:
         self.db_path = Path(db_path)
         self.claim_order = claim_order
 
+    def _connect(self, timeout: float = 60.0) -> sqlite3.Connection:
+        """
+        Create a database connection with optimal settings for concurrency.
+
+        Args:
+            timeout: Database lock timeout in seconds
+
+        Returns:
+            SQLite connection with WAL mode enabled
+        """
+        conn = sqlite3.connect(str(self.db_path), timeout=timeout)
+        # Enable WAL mode for better concurrency on each connection
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
     def add_work_units(self, work_units: List[WorkUnit]) -> None:
         """
         Add work units to the database.
@@ -33,7 +49,7 @@ class WorkUnitStore:
         Args:
             work_units: List of work units to add
         """
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             for unit in work_units:
                 parent_id = getattr(unit, 'parent_id', None)
                 conn.execute(
@@ -46,7 +62,7 @@ class WorkUnitStore:
                 )
             conn.commit()
 
-    def claim_work_unit(self, worker_id: str, max_retries: int = 5) -> Optional[WorkUnit]:
+    def claim_work_unit(self, worker_id: str, max_retries: int = 15) -> Optional[WorkUnit]:
         """
         Atomically claim the next available work unit.
 
@@ -64,7 +80,7 @@ class WorkUnitStore:
 
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+                with self._connect(timeout=60.0) as conn:
                     cursor = conn.execute(
                         f"""
                         UPDATE work_units
@@ -92,13 +108,16 @@ class WorkUnitStore:
                             parent_id=row[3],
                             current_position=row[4],
                         )
-                    return None  # No work available
+                    # No work available - add small delay to reduce thundering herd
+                    # This spreads out retry attempts from multiple workers
+                    time.sleep(random.uniform(0.01, 0.05))
+                    return None
 
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) and attempt < max_retries - 1:
-                    # Exponential backoff with jitter
-                    base_delay = 0.1 * (2 ** attempt)
-                    jitter = random.uniform(0, base_delay * 0.5)
+                    # Exponential backoff with more jitter for high contention
+                    base_delay = 0.2 * (1.5 ** attempt)
+                    jitter = random.uniform(0, base_delay * 0.8)
                     time.sleep(base_delay + jitter)
                     continue
                 # Log error and return None instead of crashing
@@ -119,7 +138,7 @@ class WorkUnitStore:
         Returns:
             WorkUnit or None if not found
         """
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             cursor = conn.execute(
                 "SELECT unit_id, start_key, end_key, parent_id, current_position FROM work_units WHERE unit_id = ?",
                 (unit_id,)
@@ -150,7 +169,8 @@ class WorkUnitStore:
             try:
                 # Use immediate transaction mode to fail fast on contention
                 # instead of waiting for long timeout periods
-                conn = sqlite3.connect(str(self.db_path), timeout=5.0, isolation_level='IMMEDIATE')
+                conn = self._connect(timeout=10.0)
+                conn.isolation_level = 'IMMEDIATE'
                 try:
                     conn.execute(
                         """
@@ -190,7 +210,7 @@ class WorkUnitStore:
 
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+                with self._connect(timeout=60.0) as conn:
                     conn.execute(
                         """
                         UPDATE work_units
@@ -213,7 +233,7 @@ class WorkUnitStore:
                     f"Failed to mark unit {unit_id} as failed after {max_retries} attempts: {e}"
                 ) from e
 
-    def complete_work_unit(self, unit_id: str, max_retries: int = 5) -> None:
+    def complete_work_unit(self, unit_id: str, max_retries: int = 20) -> None:
         """
         Mark a work unit as completed (finished filtering, ready for ingest).
 
@@ -223,11 +243,9 @@ class WorkUnitStore:
             unit_id: ID of work unit to mark as completed
             max_retries: Maximum number of retry attempts for database locks
         """
-        import random
-
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+                with sqlite3.connect(str(self.db_path), timeout=60.0) as conn:
                     cursor = conn.execute(
                         """
                         UPDATE work_units
@@ -254,8 +272,9 @@ class WorkUnitStore:
                 return
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) and attempt < max_retries - 1:
-                    base_delay = 0.1 * (2 ** attempt)
-                    jitter = random.uniform(0, base_delay * 0.5)
+                    # Longer backoff with more jitter for high contention scenarios
+                    base_delay = 0.2 * (1.5 ** attempt)
+                    jitter = random.uniform(0, base_delay * 0.8)
                     time.sleep(base_delay + jitter)
                     continue
                 # If we exhausted retries, raise the exception instead of silently failing
@@ -275,7 +294,7 @@ class WorkUnitStore:
         """
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                with self._connect(timeout=30.0) as conn:
                     cursor = conn.execute(
                         """
                         SELECT unit_id
@@ -309,7 +328,7 @@ class WorkUnitStore:
         """
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                with self._connect(timeout=30.0) as conn:
                     # First, find the next completed unit
                     cursor = conn.execute(
                         """
@@ -369,7 +388,7 @@ class WorkUnitStore:
 
         for attempt in range(max_retries):
             try:
-                with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+                with self._connect(timeout=60.0) as conn:
                     cursor = conn.execute(
                         """
                         UPDATE work_units
@@ -459,7 +478,7 @@ class WorkUnitStore:
 
     def clear_all_work_units(self) -> None:
         """Clear all work units from the database."""
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             conn.execute("DELETE FROM work_units")
             conn.commit()
 
@@ -473,7 +492,7 @@ class WorkUnitStore:
         Returns:
             Number of units reset
         """
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             # First, mark any processing units that have children as completed
             conn.execute(
                 """
@@ -511,7 +530,7 @@ class WorkUnitStore:
         Returns:
             Number of units reset
         """
-        with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+        with self._connect(timeout=30.0) as conn:
             cursor = conn.execute(
                 """
                 UPDATE work_units

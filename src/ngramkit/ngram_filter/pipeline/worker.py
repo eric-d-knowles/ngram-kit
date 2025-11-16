@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import random
+import time
 import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -72,15 +74,32 @@ def worker_process(
         output_manager = SimpleOutputManager(output_dir, extension=".db")
 
         processed_units = 0
+        consecutive_no_work = 0  # Track consecutive failed claims for backoff
 
         # Main work loop
         while True:
             work_unit = _claim_next_work_unit(worker_id, work_tracker, output_manager)
 
             if work_unit is None:
-                # No work available - exit immediately to reduce contention
-                # Other workers will complete remaining units without interference
-                break
+                # No work available - use exponential backoff to reduce thundering herd
+                consecutive_no_work += 1
+
+                # Exponential backoff: 0.5s, 1s, 2s, 4s, 8s (max)
+                # Add jitter to avoid synchronized retries
+                base_delay = min(0.5 * (2 ** (consecutive_no_work - 1)), 8.0)
+                jitter = random.uniform(0, base_delay * 0.3)
+                delay = base_delay + jitter
+
+                # Exit after several failed attempts to avoid infinite waiting
+                if consecutive_no_work >= 5:
+                    # No work for 5 attempts - likely all work is done
+                    break
+
+                time.sleep(delay)
+                continue
+
+            # Reset backoff counter on successful claim
+            consecutive_no_work = 0
 
             try:
                 # Check if range is empty first

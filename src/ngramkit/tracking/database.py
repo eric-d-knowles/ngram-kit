@@ -20,6 +20,16 @@ def init_tracking_database(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(str(db_path), timeout=10.0) as conn:
+        # Enable WAL mode for better concurrency
+        # WAL allows multiple readers while one writer is active
+        conn.execute("PRAGMA journal_mode=WAL")
+
+        # Increase cache size for better performance
+        conn.execute("PRAGMA cache_size=10000")
+
+        # Use NORMAL synchronous mode (safer than OFF, faster than FULL)
+        conn.execute("PRAGMA synchronous=NORMAL")
+
         # Work units table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS work_units (

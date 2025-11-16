@@ -69,7 +69,10 @@ def prepare_paths(pipeline_config: PipelineConfig) -> dict[str, Path]:
         'tmp_dir': pipeline_config.tmp_dir.resolve(),
     }
 
-    paths['base'] = paths['tmp_dir']
+    # Store partition cache in parent directory (not in tmp_dir) so it survives restarts
+    # The cache is based on source DB characteristics, not processing state
+    paths['cache_dir'] = paths['tmp_dir'].parent / ".partition_cache"
+    paths['base'] = paths['cache_dir']  # Used by PartitionCache
     paths['work_tracker'] = paths['tmp_dir'] / "work_tracker.db"
     paths['output_dir'] = paths['tmp_dir'] / "worker_outputs"
 
@@ -107,6 +110,9 @@ def prepare_directories(
     # Create temp directories
     temp_paths['tmp_dir'].mkdir(parents=True, exist_ok=True)
     temp_paths['output_dir'].mkdir(exist_ok=True)
+
+    # Create cache directory (survives restarts, outside of tmp_dir)
+    temp_paths['cache_dir'].mkdir(parents=True, exist_ok=True)
 
 
 def prepare_vocabulary_index(filter_config: FilterConfig) -> FilterConfig:
