@@ -561,7 +561,7 @@ def _setup_logging(pipeline_config: PipelineConfig) -> None:
     log_file = setup_logger(
         db_path=str(log_dir),
         filename_prefix="pivot_pipeline",
-        console=True,
+        console=False,
         rotate=True,
         max_bytes=100_000_000,
         backup_count=5,

@@ -106,3 +106,76 @@ def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, 
         plt.show()
 
     return similarities
+
+
+def plot_nearest_neighbors(word, year, model_dir, n=10, figsize=(10, 6)):
+    """
+    Plot the N nearest neighbors to a target word in a specific year.
+
+    Args:
+        word (str): The target word to find neighbors for.
+        year (int): The year of the corpus to use.
+        model_dir (str): Directory containing yearly .kv model files.
+        n (int): Number of nearest neighbors to show (default: 10).
+        figsize (tuple): Figure size for the plot (default: (10, 6)).
+
+    Returns:
+        list: List of (word, similarity) tuples for the nearest neighbors,
+              or None if the word is not in the vocabulary.
+    """
+    if not os.path.exists(model_dir):
+        print(f"Model directory '{model_dir}' does not exist. Please check the path.")
+        return None
+
+    # Find the model file for the specified year
+    model_pattern = os.path.join(model_dir, f"w2v_y{year}_*.kv")
+    model_files = glob.glob(model_pattern)
+
+    if not model_files:
+        print(f"⚠️ Warning: No model file found for year {year}")
+        return None
+
+    model_path = model_files[0]
+
+    try:
+        model = KeyedVectors.load(model_path, mmap="r")
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        return None
+
+    # Check if word is in vocabulary
+    if word not in model.key_to_index:
+        print(f"⚠️ Warning: '{word}' not found in {year} model vocabulary")
+        return None
+
+    # Get nearest neighbors
+    try:
+        neighbors = model.most_similar(word, topn=n)
+    except Exception as e:
+        print(f"❌ Error computing neighbors: {e}")
+        return None
+
+    # Extract words and similarities
+    words, similarities = zip(*neighbors)
+
+    # Create horizontal bar plot
+    fig, ax = plt.subplots(figsize=figsize)
+    y_pos = range(len(words))
+
+    # Plot bars in reverse order so highest similarity is at top
+    ax.barh(y_pos, similarities[::-1], align='center', color='steelblue', alpha=0.8)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(words[::-1])
+    ax.invert_yaxis()  # Highest at top
+    ax.set_xlabel('Cosine Similarity', fontsize=12)
+    ax.set_title(f'Top {n} Nearest Neighbors to "{word}" ({year})', fontsize=14, fontweight='bold')
+    ax.set_xlim([0, 1])
+
+    # Add value labels on bars
+    for i, v in enumerate(similarities[::-1]):
+        ax.text(v + 0.01, i, f'{v:.3f}', va='center', fontsize=9)
+
+    plt.tight_layout()
+    plt.show()
+
+    return neighbors
