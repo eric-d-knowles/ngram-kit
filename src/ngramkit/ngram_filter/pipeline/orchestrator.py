@@ -42,6 +42,20 @@ from .display import (
 
 __all__ = ["build_processed_db", "PipelineOrchestrator"]
 
+def _to_bytes_set(s: Optional[Set[Any]]) -> Optional[Set[bytes]]:
+    """Convert a set of strings to a set of bytes."""
+    if s is None:
+        return None
+    result = set()
+    for item in s:
+        if isinstance(item, bytes):
+            result.add(item)
+        elif isinstance(item, str):
+            result.add(item.encode('utf-8'))
+        else:
+            raise TypeError(f"Expected str or bytes, got {type(item)}")
+    return result
+
 
 class PipelineOrchestrator:
     """Orchestrates the complete ngram filtering pipeline."""
@@ -633,6 +647,8 @@ def build_processed_db(
     whitelist_path: Optional[Union[str, Path]] = None,
     whitelist_min_count: int = 1,
     whitelist_top_n: Optional[int] = None,
+    # Always-include tokens configuration (used if filter_config not provided)
+    always_include: Optional[Set[str]] = None,
     # Pipeline execution parameters
     num_workers: Optional[int] = None,
     mode: Optional[str] = None,
@@ -677,6 +693,7 @@ def build_processed_db(
         whitelist_path: Path to input whitelist file (used if filter_config not provided)
         whitelist_min_count: Minimum count threshold for whitelist tokens (default: 1)
         whitelist_top_n: Limit to top N tokens from whitelist (used if filter_config not provided)
+        always_include: Set of tokens to always preserve regardless of whitelist (e.g., {"working-class", "middle-class", "nuclear"})
         num_workers: Number of parallel workers (default: cpu_count() - 1 or num_initial_work_units, whichever is lower)
         mode: "restart" (wipe all), "resume" (continue), or "reprocess" (wipe DB, keep cache)
         use_smart_partitioning: Use density-based partitioning for better load balancing
@@ -703,13 +720,14 @@ def build_processed_db(
     # Construct FilterConfig if not provided
     if filter_config is None:
         # If filter parameters provided, use them; otherwise use defaults
-        if stop_set is not None or lemma_gen is not None or whitelist_path is not None:
+        if stop_set is not None or lemma_gen is not None or whitelist_path is not None or always_include is not None:
             filter_config = FilterConfig(
                 stop_set=stop_set,
                 lemma_gen=lemma_gen,
                 whitelist_path=whitelist_path,
                 whitelist_min_count=whitelist_min_count,
                 whitelist_top_n=whitelist_top_n,
+                always_include=_to_bytes_set(always_include) if always_include else None,
             )
         else:
             filter_config = FilterConfig()

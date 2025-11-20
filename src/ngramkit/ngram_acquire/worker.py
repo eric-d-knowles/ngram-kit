@@ -34,6 +34,7 @@ def process_and_ingest_file(
     log_file_path: Optional[str] = None,
     *,
     session: Optional[requests.Session] = None,
+    combined_bigrams: Optional[set] = None,
 ) -> Tuple[str, Dict[str, bytes], int]:
     """
     Download, decompress, and parse a gzipped ngram file.
@@ -48,6 +49,7 @@ def process_and_ingest_file(
         filter_pred: Optional predicate to filter ngrams by text
         log_file_path: Optional path to log file for worker output
         session: Optional requests.Session for connection pooling
+        combined_bigrams: Optional set of bigrams to combine with hyphens
 
     Returns:
         Tuple of (status_message, parsed_data_dict, uncompressed_bytes)
@@ -133,7 +135,8 @@ def process_and_ingest_file(
                         # Parse line and pack if valid
                         key, rec = parse_line(
                             raw.decode("utf-8"),
-                            filter_pred=filter_pred
+                            filter_pred=filter_pred,
+                            combined_bigrams=combined_bigrams
                         )
                         if key and rec:
                             parsed_data[key] = _pack_record(rec)

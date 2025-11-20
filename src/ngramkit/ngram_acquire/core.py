@@ -48,6 +48,7 @@ def download_and_ingest_to_rocksdb(
         open_type: str = "read",
         compact_after_ingest: bool = False,
         archive_path_stub: Optional[str] = None,
+        combined_bigrams: Optional[set] = None,
 ) -> None:
     """
     Main pipeline: discover, download, parse, and ingest ngram files into RocksDB.
@@ -75,6 +76,7 @@ def download_and_ingest_to_rocksdb(
         open_type: RocksDB profile ("read", "write", "read:packed24", "write:packed24")
         compact_after_ingest: If True, perform full compaction after ingestion
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
+        combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"})
     """
     logger.info("Starting N-gram processing pipeline")
 
@@ -168,6 +170,7 @@ def download_and_ingest_to_rocksdb(
             db=db,
             filter_pred=filter_pred,
             write_batch_size=write_batch_size,
+            combined_bigrams=combined_bigrams,
         )
         # Database is automatically flushed by context manager on exit
 

@@ -104,12 +104,17 @@ cpdef bytes process_tokens(
     object stop_set = None,
     object lemma_gen = None,
     object whitelist = None,
+    object always_include = None,
     bytearray outbuf = None
 ):
     """
     Bytes-only token pipeline:
       tokenize -> split POS (Google) -> lower -> whitelist -> alpha -> shorts -> stops -> lemmas
     Returns b"" if all tokens become <UNK>.
+
+    always_include: Set of tokens (e.g., b"working-class", b"nuclear") that should
+                    always be preserved in whitelist mode regardless of whether they're
+                    in the whitelist. Useful for combined bigrams or focal terms.
     """
     cdef Py_ssize_t N = ngram.__len__()
     if N == 0:
@@ -119,6 +124,7 @@ cpdef bytes process_tokens(
     cdef bint do_lower  = opt_lower
     cdef bint do_lemmas = (opt_lemmas and lemma_gen is not None)
     cdef bint do_whitelist = (whitelist is not None)
+    cdef bint do_always_include = (always_include is not None)
     cdef bint do_alpha  = opt_alpha
     cdef bint do_shorts = opt_shorts
     cdef bint do_stops  = (opt_stops and stop_set is not None)
@@ -189,7 +195,10 @@ cpdef bytes process_tokens(
         # BRANCH: whitelist vs. normal filtering
         if do_whitelist:
             # Whitelist path: simple check, no other filters
+            # Exception: always-include tokens are preserved even if not in whitelist
             if normalized_token in whitelist:
+                out_token = normalized_token
+            elif do_always_include and normalized_token in always_include:
                 out_token = normalized_token
             else:
                 out_token = SENTINEL_B

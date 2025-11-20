@@ -28,6 +28,7 @@ def process_files(
         filter_pred: Optional[Callable[[str], bool]] = None,
         write_batch_size: int = 50_000,
         write_batch_bytes: int = 64 * (1 << 20),
+        combined_bigrams: Optional[set] = None,
 ) -> Tuple[List[str], List[str], int, int, int]:
     """
     Process files concurrently and ingest results into RocksDB.
@@ -43,6 +44,7 @@ def process_files(
         filter_pred: Optional predicate to filter ngrams by text
         write_batch_size: Max entries per batch before flush
         write_batch_bytes: Max bytes per batch before flush
+        combined_bigrams: Optional set of bigrams to combine with hyphens
 
     Returns:
         Tuple of (success_msgs, failure_msgs, total_entries_written,
@@ -103,6 +105,7 @@ def process_files(
                         idx,
                         filter_pred,
                         log_file_path,
+                        combined_bigrams=combined_bigrams,
                     )
                     futures[fut] = url
 

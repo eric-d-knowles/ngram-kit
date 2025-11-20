@@ -42,6 +42,7 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
     Returns None to drop the ngram.
     """
     stop_set_b = _to_bytes_set(cfg.stop_set)
+    always_include_b = _to_bytes_set(cfg.always_include)
 
     outbuf = bytearray()  # reused per-processor
 
@@ -63,6 +64,7 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
             stop_set=stop_set_b,
             lemma_gen=cfg.lemma_gen,
             whitelist=cfg.whitelist,
+            always_include=always_include_b,
             outbuf=outbuf,
         )
         return out or None

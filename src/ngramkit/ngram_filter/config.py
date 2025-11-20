@@ -27,6 +27,9 @@ class FilterConfig:
     whitelist_top_n: Optional[int] = None
     whitelist: Optional[Set[bytes]] = None
 
+    # Always-include tokens configuration (tokens to preserve regardless of whitelist)
+    always_include: Optional[Set[bytes]] = None  # Set of tokens to always include (e.g., b"working-class", b"nuclear")
+
 
 # Pipeline orchestration options
 @dataclass(frozen=True)
