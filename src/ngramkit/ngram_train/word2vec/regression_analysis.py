@@ -446,15 +446,23 @@ def plot_regression_results(
         '#FFB000',  # Yellow
     ]
 
-    # Determine number of subplots
-    n_subplots = 2 if plot_random_effects else 1
+    # Determine number of subplots - only create 2 if we have random effects
+    has_random_effects = isinstance(results, MixedLMResults) and hasattr(results, 'random_effects')
+    n_subplots = 2 if (plot_random_effects and has_random_effects) else 1
 
-    fig, axes = plt.subplots(1, n_subplots, figsize=figsize, dpi=100)
+    # Adjust figsize to keep FE plot dimensions consistent
+    if n_subplots == 1:
+        # Use half the width for single plot to match the FE subplot size when n_subplots=2
+        adjusted_figsize = (figsize[0] / 2, figsize[1])
+    else:
+        adjusted_figsize = figsize
+
+    fig, axes = plt.subplots(1, n_subplots, figsize=adjusted_figsize, dpi=100)
     if n_subplots == 1:
         axes = [axes]
 
-    # Extract fixed effects
-    fe_params = results.fe_params
+    # Extract coefficients (OLS uses 'params', mixed models use 'fe_params')
+    fe_params = results.fe_params if isinstance(results, MixedLMResults) else results.params
     fe_conf = results.conf_int(alpha=alpha)
 
     # Remove intercept for cleaner visualization
@@ -505,7 +513,7 @@ def plot_regression_results(
     sns.despine(ax=ax)
 
     # Plot 2: Random effects (if applicable)
-    if plot_random_effects and hasattr(results, 'random_effects'):
+    if has_random_effects:
         ax = axes[1]
 
         # Extract random effects
@@ -541,23 +549,24 @@ def plot_regression_results(
 
 
 def get_model_summary(
-    results: MixedLMResults,
+    results: Union[MixedLMResults, RegressionResultsWrapper],
     predictors: Optional[List[str]] = None
 ) -> pd.DataFrame:
     """
     Extract a summary table of regression coefficients.
 
     Args:
-        results: MixedLMResults object from run_regression_analysis
+        results: MixedLMResults or RegressionResultsWrapper object from run_regression_analysis
         predictors: Optional list of specific predictors to include
 
     Returns:
         DataFrame with coefficient, std error, t-value, p-value, and CI
     """
-    # Extract fixed effects summary
+    # Extract summary (OLS and mixed models have different attribute names)
+    is_mixed = isinstance(results, MixedLMResults)
     summary_df = pd.DataFrame({
-        'Coefficient': results.fe_params,
-        'Std Error': results.bse_fe,
+        'Coefficient': results.fe_params if is_mixed else results.params,
+        'Std Error': results.bse_fe if is_mixed else results.bse,
         't-value': results.tvalues,
         'p-value': results.pvalues,
         'CI Lower': results.conf_int()[0],

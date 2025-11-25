@@ -378,8 +378,9 @@ class W2VModel:
             perm_test_statistic = np.sum(perm_s_vals_targ1) - np.sum(perm_s_vals_targ2)
             permuted_test_statistics.append(perm_test_statistic)
 
-        # Compute p-value (two-tailed test) by comparing test statistics
-        p_value = np.mean(np.abs(np.array(permuted_test_statistics)) >= np.abs(observed_test_statistic))
+        # Compute p-value (one-sided test) by comparing test statistics
+        # Following Caliskan et al. (2017): Pr[s(X_i, Y_i, A, B) > s(X, Y, A, B)]
+        p_value = np.mean(np.array(permuted_test_statistics) > observed_test_statistic)
 
         # Compute standard deviation of the permuted test statistics (confidence interval estimate)
         std_dev = np.std(permuted_test_statistics, ddof=1) if return_std else None
