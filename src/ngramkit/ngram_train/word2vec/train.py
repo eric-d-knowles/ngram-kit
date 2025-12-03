@@ -16,7 +16,7 @@ from .display import print_training_header, print_completion_banner, LINE_WIDTH
 from .model import create_corpus_file
 from .worker import train_model
 
-__all__ = ["train_models", "build_word2vec_models"]
+__all__ = ["train_models", "build_word2vec_models", "transfer_models"]
 
 
 def _parse_model_filename(filename):
@@ -627,3 +627,202 @@ def build_word2vec_models(
     # Return model directory path
     model_dir = os.path.join(model_base, f"models_{dir_suffix}")
     return model_dir
+
+
+def transfer_models(
+    ngram_size,
+    repo_release_id,
+    repo_corpus_id,
+    db_path_stub,
+    source_suffix,
+    dest_suffix,
+    filter_params=None,
+    overwrite=False,
+    validate=True,
+    verbose=True
+):
+    """
+    Transfer models with specific hyperparameters from one dir_suffix to another.
+
+    This function is useful when you've completed hyperparameter grid search and want
+    to copy selected models (e.g., those with optimal hyperparameters) to a different
+    directory for final use.
+
+    Args:
+        ngram_size (int): Size of n-grams (e.g., 5).
+        repo_release_id (str): Release identifier (e.g., '20200217').
+        repo_corpus_id (str): Corpus identifier (e.g., 'eng').
+        db_path_stub (str): Base path to corpus database directory.
+        source_suffix (str): Source dir_suffix (e.g., 'test').
+        dest_suffix (str): Destination dir_suffix (e.g., 'final').
+        filter_params (dict, optional): Dictionary of hyperparameter filters.
+            Keys can be: 'year', 'weight_by', 'vector_size', 'window',
+            'min_count', 'sg', 'epochs'. Values can be single values or tuples/lists
+            for multiple matches. Examples:
+            - {'vector_size': 300, 'epochs': 10}
+            - {'vector_size': (200, 300), 'epochs': 10}
+            If None, all models are transferred.
+        overwrite (bool): If True, remove existing destination directory before transfer.
+            If False and destination exists, raises error. Default: False.
+        validate (bool): If True, only transfer models that pass validation check.
+            Default: True.
+        verbose (bool): If True, print detailed progress information. Default: True.
+
+    Returns:
+        dict: Summary with keys:
+            - 'transferred': Number of models successfully transferred
+            - 'skipped': Number of models skipped (failed validation)
+            - 'total_found': Total models matching filter
+            - 'source_dir': Source directory path
+            - 'dest_dir': Destination directory path
+
+    Raises:
+        ValueError: If source directory doesn't exist or contains no models.
+        FileExistsError: If destination exists and overwrite=False.
+
+    Example:
+        >>> # Transfer all models with vector_size=300 and epochs=10 from 'test' to 'final'
+        >>> result = transfer_models(
+        ...     ngram_size=5,
+        ...     repo_release_id='20200217',
+        ...     repo_corpus_id='eng',
+        ...     db_path_stub='/scratch/edk202/NLP_corpora/Google_Books/',
+        ...     source_suffix='test',
+        ...     dest_suffix='final',
+        ...     filter_params={'vector_size': 300, 'epochs': 10},
+        ...     overwrite=True
+        ... )
+        >>> print(f"Transferred {result['transferred']} models")
+    """
+    # Construct source and destination paths
+    corpus_path = os.path.join(
+        db_path_stub, repo_release_id, repo_corpus_id, f"{ngram_size}gram_files"
+    )
+
+    # Get model directories using existing path construction logic
+    from .config import construct_model_path
+    model_base = construct_model_path(corpus_path)
+
+    source_dir = os.path.join(model_base, f"models_{source_suffix}")
+    dest_dir = os.path.join(model_base, f"models_{dest_suffix}")
+
+    # Validate source directory exists
+    if not os.path.exists(source_dir):
+        raise ValueError(f"Source directory does not exist: {source_dir}")
+
+    # Check for models in source
+    source_files = [f for f in os.listdir(source_dir) if f.endswith('.kv')]
+    if not source_files:
+        raise ValueError(f"No .kv model files found in source directory: {source_dir}")
+
+    # Handle destination directory
+    if os.path.exists(dest_dir):
+        if not overwrite:
+            raise FileExistsError(
+                f"Destination directory already exists: {dest_dir}\n"
+                f"Use overwrite=True to remove existing directory."
+            )
+        if verbose:
+            print(f"\nRemoving existing destination directory: {dest_dir}")
+        shutil.rmtree(dest_dir)
+
+    # Create destination directory
+    os.makedirs(dest_dir, exist_ok=True)
+
+    if verbose:
+        print("\nMODEL TRANSFER")
+        print("=" * LINE_WIDTH)
+        print(f"Source:      {source_dir}")
+        print(f"Destination: {dest_dir}")
+        if filter_params:
+            print(f"Filters:     {filter_params}")
+        else:
+            print("Filters:     None (transferring all models)")
+        print(f"Validate:    {validate}")
+        print("")
+
+    # Normalize filter_params values to sets for easy matching
+    normalized_filters = {}
+    if filter_params:
+        for key, value in filter_params.items():
+            if isinstance(value, (list, tuple)):
+                normalized_filters[key] = set(value)
+            else:
+                normalized_filters[key] = {value}
+
+    # Filter and transfer models
+    transferred = 0
+    skipped = 0
+    total_found = 0
+
+    # Use tqdm if available for progress bar
+    iterator = tqdm(source_files, desc="Transferring models", unit=" files") if verbose else source_files
+
+    for filename in iterator:
+        # Parse model parameters
+        params = _parse_model_filename(filename)
+        if params is None:
+            continue  # Skip files that don't match expected pattern
+
+        year, weight_by, vector_size, window, min_count, sg, epochs = params
+
+        # Apply filters if specified
+        if normalized_filters:
+            param_dict = {
+                'year': year,
+                'weight_by': weight_by,
+                'vector_size': vector_size,
+                'window': window,
+                'min_count': min_count,
+                'sg': sg,
+                'epochs': epochs
+            }
+
+            # Check if model matches all filters
+            match = True
+            for key, allowed_values in normalized_filters.items():
+                if param_dict.get(key) not in allowed_values:
+                    match = False
+                    break
+
+            if not match:
+                continue  # Skip models that don't match filters
+
+        total_found += 1
+        source_path = os.path.join(source_dir, filename)
+
+        # Validate if requested
+        if validate:
+            if not _is_model_valid(source_path):
+                skipped += 1
+                if verbose:
+                    print(f"  Skipping invalid model: {filename}")
+                continue
+
+        # Transfer model
+        dest_path = os.path.join(dest_dir, filename)
+        try:
+            shutil.copy2(source_path, dest_path)
+            transferred += 1
+        except Exception as e:
+            skipped += 1
+            if verbose:
+                print(f"  Error copying {filename}: {e}")
+
+    # Print summary
+    if verbose:
+        print("\nTRANSFER COMPLETE")
+        print("=" * LINE_WIDTH)
+        print(f"Models found:      {total_found}")
+        print(f"Transferred:       {transferred}")
+        print(f"Skipped:           {skipped}")
+        print(f"Destination:       {dest_dir}")
+        print("")
+
+    return {
+        'transferred': transferred,
+        'skipped': skipped,
+        'total_found': total_found,
+        'source_dir': source_dir,
+        'dest_dir': dest_dir
+    }

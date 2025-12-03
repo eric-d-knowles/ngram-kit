@@ -1,6 +1,6 @@
 """Word2Vec training module for Google N-grams."""
 
-from .train import train_models, build_word2vec_models
+from .train import train_models, build_word2vec_models, transfer_models
 from .model import SentencesIterable, train_word2vec, create_corpus_file
 from .worker import train_model, configure_logging
 from .config import ensure_iterable, construct_model_path, set_info
@@ -15,6 +15,7 @@ __all__ = [
     # Main entry points
     "train_models",
     "build_word2vec_models",
+    "transfer_models",
     "evaluate_models",
     "evaluate_word2vec_models",
     "normalize_and_align_models",
