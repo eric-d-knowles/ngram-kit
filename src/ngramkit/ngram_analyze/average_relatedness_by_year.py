@@ -31,7 +31,7 @@ def compute_yearly_mean_similarity(args):
 
 def track_word_semantic_drift(
     word, start_year, end_year, model_dir,
-    excluded_words=None, plot=True, smooth=False, sigma=2,
+    excluded_words=None, year_step=1, plot=True, smooth=False, sigma=2,
     confidence=0.95, error_type="CI", num_workers=None
 ):
     """
@@ -43,6 +43,7 @@ def track_word_semantic_drift(
         end_year (int): The ending year of the range.
         model_dir (str): Directory containing yearly .kv model files.
         excluded_words (list or set): Words to exclude from similarity calculations.
+        year_step (int): Step size for year increments (default: 1). Should match the year_step used in training.
         plot (bool or int): If `True`, plots without chunking. If an integer `N`, averages every `N` years.
         smooth (bool): Whether to apply smoothing.
         sigma (float): Standard deviation for Gaussian smoothing.
@@ -62,7 +63,7 @@ def track_word_semantic_drift(
 
     # Detect available models
     model_paths = {}
-    for year in range(start_year, end_year + 1):
+    for year in range(start_year, end_year + 1, year_step):
         model_pattern = os.path.join(model_dir, f"w2v_y{year}_*.kv")
         model_files = sorted(glob.glob(model_pattern))
         if model_files:

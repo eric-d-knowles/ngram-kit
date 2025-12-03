@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from gensim.models import KeyedVectors
 
-def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, plot=True, smooth=False, sigma=2):
+def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, year_step=1, plot=True, smooth=False, sigma=2):
     """
     Compute the cosine similarity between two words across a range of yearly models.
 
@@ -15,6 +15,7 @@ def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, 
         start_year (int): The starting year of the range.
         end_year (int): The ending year of the range.
         model_dir (str): Directory containing yearly .kv model files.
+        year_step (int): Step size for year increments (default: 1). Should match the year_step used in training.
         plot (bool or int): If `True`, plots yearly data. If an integer `N`, averages every `N` years for plotting.
         smooth (bool): Whether to overlay a smoothing line on the graph.
         sigma (float): Standard deviation for Gaussian smoothing (higher = smoother curve).
@@ -29,7 +30,7 @@ def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, 
     similarities = {}
     missing_models = []
 
-    for year in range(start_year, end_year + 1):
+    for year in range(start_year, end_year + 1, year_step):
         model_pattern = os.path.join(model_dir, f"w2v_y{year}_*.kv")
         model_files = glob.glob(model_pattern)
 
@@ -53,13 +54,13 @@ def cosine_similarity_over_years(word1, word2, start_year, end_year, model_dir, 
         print("❌ No valid similarity scores computed. Exiting.")
         return {}
 
-    # ✅ Create full range of years and fill missing values with NaN
-    all_years = np.arange(start_year, end_year + 1)
+    # ✅ Create range of years based on year_step
+    all_years = np.arange(start_year, end_year + 1, year_step)
     similarity_values = np.array([similarities.get(year, np.nan) for year in all_years])
 
-    # ✅ Interpolate missing values
+    # ✅ Interpolate missing values (only for gaps in the stepped years)
     mask = ~np.isnan(similarity_values)
-    if mask.any():
+    if mask.any() and not mask.all():
         similarity_values = np.interp(all_years, all_years[mask], similarity_values[mask])
 
     # ✅ Set `chunk_size` Based on `plot`

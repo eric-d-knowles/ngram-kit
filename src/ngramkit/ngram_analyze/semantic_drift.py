@@ -22,7 +22,7 @@ def compute_similarity_to_previous_year(args):
     return year, similarity_mean, similarity_sd, common_words
 
 def track_yearly_drift(
-    start_year, end_year, model_dir, word=None, plot=True, smooth=False, sigma=2,
+    start_year, end_year, model_dir, word=None, year_step=1, plot=True, smooth=False, sigma=2,
     confidence=0.95, error_type="CI", num_workers=None, df=None, regress_on=None
 ):
     drift_data = {}
@@ -30,7 +30,7 @@ def track_yearly_drift(
     error_years = {}
 
     model_paths = {}
-    for year in range(start_year, end_year + 1):
+    for year in range(start_year, end_year + 1, year_step):
         model_pattern = os.path.join(model_dir, f"w2v_y{year}_*.kv")
         model_files = sorted(glob.glob(model_pattern))
         if model_files:

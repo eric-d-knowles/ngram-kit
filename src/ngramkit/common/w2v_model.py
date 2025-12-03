@@ -314,10 +314,29 @@ class W2VModel:
 
         return total_similarity / count if count > 0 else 0
 
-    def compute_weat(self, targ1, targ2, attr1, attr2, num_permutations=10000, return_std=False):
+    def compute_weat(self, targ1, targ2, attr1, attr2, num_permutations=10000, return_std=False, return_associations=False, labels=None):
         """
         Compute WEAT effect size, p-value, and optionally return standard deviation from permutations.
         Fully follows Caliskan et al.'s method.
+
+        Args:
+            targ1 (list): First set of target words
+            targ2 (list): Second set of target words
+            attr1 (list): First set of attribute words
+            attr2 (list): Second set of attribute words
+            num_permutations (int): Number of permutations for significance testing
+            return_std (bool): If True, returns standard deviation from permutations
+            return_associations (bool): If True, returns the 4 component mean associations
+            labels (dict): Optional labels for targets and attributes. Format:
+                {'target1': 'Label1', 'target2': 'Label2', 'attribute1': 'Label3', 'attribute2': 'Label4'}
+                If None, uses default keys ('target1_attribute1', etc.)
+
+        Returns:
+            tuple: Format depends on parameters:
+                - Basic: (effect_size, p_value)
+                - With return_std: (effect_size, p_value, std_dev)
+                - With return_associations: (effect_size, p_value, associations_dict)
+                - With both: (effect_size, p_value, std_dev, associations_dict)
         """
         missing_words = [word for word in (targ1 + targ2 + attr1 + attr2) if word not in self.vocab]
         if missing_words:
@@ -348,6 +367,27 @@ class W2VModel:
 
         if pooled_std == 0:
             print("⚠️ Warning: No variation in association scores. Returning NaN for WEAT effect size.")
+            if return_associations:
+                # Create association keys using labels if provided
+                if labels:
+                    t1, t2, a1, a2 = labels['target1'], labels['target2'], labels['attribute1'], labels['attribute2']
+                    associations = {
+                        f'{t1}→{a1}': np.nan,
+                        f'{t1}→{a2}': np.nan,
+                        f'{t2}→{a1}': np.nan,
+                        f'{t2}→{a2}': np.nan
+                    }
+                else:
+                    associations = {
+                        'target1_attribute1': np.nan,
+                        'target1_attribute2': np.nan,
+                        'target2_attribute1': np.nan,
+                        'target2_attribute2': np.nan
+                    }
+                if return_std:
+                    return (np.nan, None, None, associations)
+                else:
+                    return (np.nan, None, associations)
             return (np.nan, None, None) if return_std else (np.nan, None)
 
         # Compute observed test statistic and WEAT effect size
@@ -357,7 +397,37 @@ class W2VModel:
         mean_diff = np.mean(s_vals_targ1) - np.mean(s_vals_targ2)
         weat_effect_size = mean_diff / pooled_std
 
+        # Compute component associations if requested
+        if return_associations:
+            # Compute mean associations for each target-attribute pair
+            targ1_attr1_sims = [mean_similarity(t, attr1_filtered) for t in targ1_filtered]
+            targ1_attr2_sims = [mean_similarity(t, attr2_filtered) for t in targ1_filtered]
+            targ2_attr1_sims = [mean_similarity(t, attr1_filtered) for t in targ2_filtered]
+            targ2_attr2_sims = [mean_similarity(t, attr2_filtered) for t in targ2_filtered]
+
+            # Create association keys using labels if provided
+            if labels:
+                t1, t2, a1, a2 = labels['target1'], labels['target2'], labels['attribute1'], labels['attribute2']
+                associations = {
+                    f'{t1}→{a1}': np.mean(targ1_attr1_sims) if targ1_attr1_sims else np.nan,
+                    f'{t1}→{a2}': np.mean(targ1_attr2_sims) if targ1_attr2_sims else np.nan,
+                    f'{t2}→{a1}': np.mean(targ2_attr1_sims) if targ2_attr1_sims else np.nan,
+                    f'{t2}→{a2}': np.mean(targ2_attr2_sims) if targ2_attr2_sims else np.nan
+                }
+            else:
+                associations = {
+                    'target1_attribute1': np.mean(targ1_attr1_sims) if targ1_attr1_sims else np.nan,
+                    'target1_attribute2': np.mean(targ1_attr2_sims) if targ1_attr2_sims else np.nan,
+                    'target2_attribute1': np.mean(targ2_attr1_sims) if targ2_attr1_sims else np.nan,
+                    'target2_attribute2': np.mean(targ2_attr2_sims) if targ2_attr2_sims else np.nan
+                }
+
         if num_permutations == 0:
+            if return_associations:
+                if return_std:
+                    return (weat_effect_size, None, pooled_std, associations)
+                else:
+                    return (weat_effect_size, None, associations)
             return (weat_effect_size, None, pooled_std) if return_std else (weat_effect_size, None)
 
         # Permutation Test (Shuffle only target words `X` and `Y`)
@@ -385,7 +455,14 @@ class W2VModel:
         # Compute standard deviation of the permuted test statistics (confidence interval estimate)
         std_dev = np.std(permuted_test_statistics, ddof=1) if return_std else None
 
-        return (weat_effect_size, p_value, std_dev) if return_std else (weat_effect_size, p_value)
+        # Return results based on flags
+        if return_associations:
+            if return_std:
+                return (weat_effect_size, p_value, std_dev, associations)
+            else:
+                return (weat_effect_size, p_value, associations)
+        else:
+            return (weat_effect_size, p_value, std_dev) if return_std else (weat_effect_size, p_value)
 
     def save(self, output_path):
         """
