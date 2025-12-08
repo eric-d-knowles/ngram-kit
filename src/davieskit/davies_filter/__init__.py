@@ -5,12 +5,19 @@ This module provides filtering and preprocessing capabilities for
 Davies corpus data stored in RocksDB, preparing it for word2vec training.
 
 Main entry point:
-    build_filtered_db() - Full filtering pipeline
+    filter_davies_corpus() - Full filtering pipeline
 
 Key components:
     - config: Configuration for filtering options
     - processor: Apply filters (lowercase, lemmatization, stopwords)
-    - pipeline: Parallel processing orchestration
+    - core: Main filtering orchestration
 """
 
-__all__ = []
+from .core import filter_davies_corpus
+from .config import FilterConfig, PipelineConfig
+
+__all__ = [
+    "filter_davies_corpus",
+    "FilterConfig",
+    "PipelineConfig",
+]

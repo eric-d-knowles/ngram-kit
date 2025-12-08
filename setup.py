@@ -32,6 +32,11 @@ ext_modules = [
         sources=["src/ngramkit/ngram_filter/filters/core_cy.pyx"],
         include_dirs=[np.get_include()],
     ),
+    Extension(
+        name="davieskit.davies_filter.filters.core_cy",
+        sources=["src/davieskit/davies_filter/filters/core_cy.pyx"],
+        include_dirs=[np.get_include()],
+    ),
 ]
 
 compiler_directives = dict(

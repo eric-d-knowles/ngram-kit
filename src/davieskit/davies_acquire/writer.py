@@ -20,6 +20,7 @@ DEFAULT_BATCH_SIZE = 100_000
 def write_sentences_batch(
     db,
     sentences: List[Tuple[int, List[str]]],
+    disable_wal: bool = True,
 ) -> int:
     """
     Write a batch of sentences to the database.
@@ -27,6 +28,7 @@ def write_sentences_batch(
     Args:
         db: Open RocksDB handle
         sentences: List of (year, tokens) tuples
+        disable_wal: If True, disable write-ahead log for better performance
 
     Returns:
         Number of sentences written
@@ -40,13 +42,16 @@ def write_sentences_batch(
         >>> count
         2
     """
-    batch = db.write_batch()
+    if not sentences:
+        return 0
 
-    for year, tokens in sentences:
-        key = encode_sentence_key(year, tokens)
-        batch.put(key, EMPTY_VALUE)
+    # Use context manager for batch writing
+    with db.write_batch(disable_wal=disable_wal, sync=False) as wb:
+        for year, tokens in sentences:
+            key = encode_sentence_key(year, tokens)
+            wb.put(key, EMPTY_VALUE)
+    # Context manager auto-commits on exit
 
-    batch.write()
     return len(sentences)
 
 
