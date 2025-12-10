@@ -50,6 +50,41 @@ Three modules are provided for downloading and processing n-grams:
 
 ## Installation
 
+### Option 1: Apptainer Container (Recommended for HPC)
+
+Build the pre-configured container with all dependencies:
+
+```bash
+./build/build_container.sh
+```
+
+This builds the container on a compute node to avoid memory issues. The container provides the environment but the package is installed from the source directory:
+
+```bash
+# Install the package (run once, from the project root)
+apptainer exec --nv ngram-kit.sif pip install -e .
+
+# Run Python scripts with the container environment
+apptainer exec --nv ngram-kit.sif python your_script.py
+
+# Interactive Python session
+apptainer exec --nv ngram-kit.sif python
+
+# Run Jupyter notebooks
+apptainer exec --nv ngram-kit.sif jupyter notebook
+```
+
+The container includes:
+- CUDA 12.6.2 + cuDNN
+- Python 3.11 with all required packages
+- spaCy with 7 language models (en, zh, fr, de, it, ru, es)
+- rocks-shim for high-speed database access
+- All system dependencies pre-installed
+
+The `-e` flag installs the package in editable mode, so changes to the source code are immediately available.
+
+### Option 2: Direct Installation
+
 ```bash
 pip install git+https://github.com/eric-d-knowles/ngram-prep.git
 ```

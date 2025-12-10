@@ -14,16 +14,59 @@ from typing import List
 from ngramkit.ngram_pivot.encoding import (
     encode_year_ngram_key,
     decode_year_ngram_key,
+    encode_year_stats,
+    decode_year_stats,
 )
 
 __all__ = [
     "encode_sentence_key",
     "decode_sentence_key",
-    "EMPTY_VALUE",
+    "encode_occurrence_count",
+    "decode_occurrence_count",
 ]
 
-# Davies entries have no frequency data, so use empty value
-EMPTY_VALUE = b''
+
+def encode_occurrence_count(count: int, year: int = 0) -> bytes:
+    """
+    Encode occurrence count as 24-byte value for packed24 merge operator.
+
+    The packed24 merge operator expects 24-byte records: (year, occurrences, documents).
+    We store (year, occurrences, 1) where year is redundant with the key but needed for merge.
+
+    Args:
+        count: Number of occurrences
+        year: Year value (optional, defaults to 0)
+
+    Returns:
+        24-byte packed value
+    """
+    import struct
+    return struct.pack('<QQQ', year, count, 1)
+
+
+def decode_occurrence_count(value: bytes) -> int:
+    """
+    Decode occurrence count from packed value.
+
+    Handles both 16-byte (old format) and 24-byte (new format with year) values.
+
+    Args:
+        value: Packed value (16 or 24 bytes)
+
+    Returns:
+        Number of occurrences
+    """
+    import struct
+    if len(value) == 24:
+        # New format: (year, occurrences, documents)
+        year, occurrences, documents = struct.unpack('<QQQ', value)
+        return occurrences
+    elif len(value) == 16:
+        # Old format: (occurrences, documents)
+        occurrences, documents = decode_year_stats(value)
+        return occurrences
+    else:
+        raise ValueError(f"Unexpected value length: {len(value)} bytes (expected 16 or 24)")
 
 
 def encode_sentence_key(year: int, tokens: List[str]) -> bytes:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
@@ -58,13 +59,60 @@ def process_single_file(
     return zip_path.name, sentence_count, error_count
 
 
+def _perform_compaction(db, db_path: Path) -> None:
+    """
+    Perform full compaction on the database using compact_all().
+
+    Args:
+        db: Open RocksDB handle
+        db_path: Path to database (for logging)
+    """
+    logger.info("Starting post-ingestion compaction")
+    print()
+    print(format_banner("Post-Ingestion Compaction"))
+
+    # Get initial size if possible
+    try:
+        initial_size = db.get_property("rocksdb.total-sst-files-size")
+        initial_size = int(initial_size) if initial_size else None
+        if initial_size:
+            print(f"Initial DB size:         {format_bytes(initial_size)}")
+    except Exception:
+        initial_size = None
+
+    sys.stdout.flush()
+
+    start_time = time.time()
+    try:
+        db.compact_all()
+        elapsed = time.time() - start_time
+
+        print(f"Compaction completed in {timedelta(seconds=int(elapsed))}")
+
+        # Get final size if possible
+        try:
+            final_size = db.get_property("rocksdb.total-sst-files-size")
+            final_size = int(final_size) if final_size else None
+            if initial_size and final_size:
+                saved = initial_size - final_size
+                pct = (saved / initial_size) * 100
+                print(f"Size before:             {format_bytes(initial_size)}")
+                print(f"Size after:              {format_bytes(final_size)}")
+                print(f"Space saved:             {format_bytes(saved)} ({pct:.1f}%)")
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(f"Compaction failed: {e}")
+        print(f"Compaction failed: {e}")
+        print("Database is still usable, but may not be optimally compacted.")
+
+
 def ingest_davies_corpus(
-    corpus_name: str,
-    corpus_path: str,
-    db_path: str,
-    overwrite_db: bool = True,
+    db_path_stub: str,
     workers: Optional[int] = None,
     write_batch_size: int = 100_000,
+    compact_after_ingest: bool = False,
 ) -> None:
     """
     Main pipeline: read Davies corpus text files and ingest into RocksDB.
@@ -74,17 +122,26 @@ def ingest_davies_corpus(
     2. Opens/creates RocksDB in pivoted format
     3. Reads and tokenizes text files
     4. Writes sentences directly to pivoted DB: (year, tokens) -> ()
+    5. Optionally performs post-ingestion compaction
 
     Args:
-        corpus_name: Name of corpus (e.g., "COHA", "COCA")
-        corpus_path: Path to corpus directory (containing text/ subdirectory)
-        db_path: Path for output database
-        overwrite_db: If True, remove existing database before starting
+        db_path_stub: Base path containing corpus name (e.g., "/path/to/COHA")
         workers: Number of concurrent workers (default: cpu_count - 1)
         write_batch_size: Number of sentences per batch write
+        compact_after_ingest: If True, perform full compaction after ingestion
     """
     logger.info("Starting Davies corpus acquisition pipeline")
     start_time = datetime.now()
+
+    # Extract corpus name from db_path_stub
+    db_path_stub_obj = Path(db_path_stub)
+    corpus_name = db_path_stub_obj.name
+
+    # Corpus path is the same as db_path_stub
+    corpus_path = db_path_stub_obj
+
+    # Database path is db_path_stub/db
+    db_path = db_path_stub_obj / "db"
 
     # Validate corpus path
     corpus_path = Path(corpus_path)
@@ -95,9 +152,9 @@ def ingest_davies_corpus(
     if not text_dir.exists():
         raise ValueError(f"Text directory not found: {text_dir}")
 
-    # Handle existing database
+    # Handle existing database - always remove for fresh start
     db_path = Path(db_path)
-    if overwrite_db and db_path.exists():
+    if db_path.exists():
         logger.info("Removing existing database for fresh start")
         # Use safe cleanup from ngramkit
         from ngramkit.ngram_acquire.utils.cleanup import safe_db_cleanup
@@ -131,20 +188,18 @@ def ingest_davies_corpus(
             continue
 
     # Print pipeline header
+    print(format_banner(f"{corpus_name} CORPUS ACQUISITION", style="━"))
+    print(f"Start Time: {start_time:%Y-%m-%d %H:%M:%S}")
     print()
-    print(format_banner(f"{corpus_name} CORPUS ACQUISITION"))
-    print(f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(format_banner("Configuration"))
+    print(f"Corpus path:          {corpus_path}")
+    print(f"Text directory:       {text_dir}")
+    print(f"DB path:              {db_path}")
+    print(f"Text files found:     {len(file_year_pairs)}")
+    print(f"Workers:              {workers}")
+    print(f"Batch size:           {write_batch_size:,}")
     print()
-    print("Configuration")
-    print("=" * 80)
-    print(f"Corpus path:        {corpus_path}")
-    print(f"Text directory:     {text_dir}")
-    print(f"Database path:      {db_path}")
-    print(f"Text files found:   {len(file_year_pairs)}")
-    print(f"Workers:            {workers}")
-    print(f"Batch size:         {write_batch_size:,}")
-    print(f"Overwrite DB:       {overwrite_db}")
-    print()
+    print(format_banner("Processing Files"))
     sys.stdout.flush()
 
     # Open database and create writer
@@ -155,10 +210,6 @@ def ingest_davies_corpus(
         total_sentences = 0
         total_errors = 0
         files_processed = 0
-
-        print("Processing files...")
-        print("=" * 80)
-        sys.stdout.flush()
 
         # Process files sequentially for now (easier to track progress)
         # TODO: Add parallel processing later
@@ -189,32 +240,24 @@ def ingest_davies_corpus(
         logger.info("Flushing remaining sentences...")
         writer.close()
 
+        # Optional post-ingestion compaction
+        if compact_after_ingest:
+            _perform_compaction(db, db_path)
+
     # Print completion summary
     end_time = datetime.now()
     elapsed = end_time - start_time
 
+    print("\nProcessing complete!")
     print()
-    print(format_banner("ACQUISITION COMPLETE"))
-    print(f"End Time:           {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Duration:           {timedelta(seconds=int(elapsed.total_seconds()))}")
+    print(format_banner("Final Summary"))
+    print(f"Files processed:          {files_processed}/{len(file_year_pairs)}")
+    print(f"Failed files:             {total_errors}")
+    print(f"Total sentences written:  {total_sentences:,}")
+    print(f"Database path:            {db_path}")
     print()
-    print("Statistics")
-    print("=" * 80)
-    print(f"Files processed:    {files_processed}/{len(file_year_pairs)}")
-    print(f"Sentences written:  {total_sentences:,}")
-    print(f"Errors:             {total_errors}")
-    print(f"Database path:      {db_path}")
+    print(f"End Time: {end_time:%Y-%m-%d %H:%M:%S}")
+    print(f"Total Runtime: {elapsed}")
     print()
-
-    # Get database size
-    try:
-        with open_db(db_path, mode="r") as db:
-            prop = db.get_property("rocksdb.total-sst-files-size")
-            if prop:
-                size_bytes = int(prop)
-                print(f"Database size:      {format_bytes(size_bytes)}")
-    except Exception:
-        pass
 
     logger.info(f"Acquisition complete: {total_sentences:,} sentences written")
-    print()
