@@ -224,13 +224,21 @@ def _create_spell_checker(language: str = "en_US") -> Optional["enchant.Dict"]:
 
 
 def _is_correctly_spelled(word: str, spell_checker: Optional["enchant.Dict"]) -> bool:
-    """Check if a word is correctly spelled."""
+    """Check if a word is correctly spelled.
+
+    Note: Spell checking only applies to pure alphabetic tokens. Tokens with
+    hyphens, apostrophes, numbers, or other non-alphabetic characters are
+    accepted without spell checking, since the user's filter settings (alpha_only)
+    already determined whether such tokens should be in the corpus.
+    """
     if spell_checker is None:
         return True  # No spell checking available, accept all words
 
-    # Skip non-alphabetic tokens (numbers, symbols, etc.)
+    # Only spell-check pure alphabetic tokens
+    # Non-alphabetic tokens (hyphens, apostrophes, numbers, etc.) are accepted
+    # because they passed the user's chosen filters during corpus filtering
     if not word.isalpha():
-        return False
+        return True  # Accept without spell checking
 
     return spell_checker.check(word)
 
@@ -272,6 +280,82 @@ def _check_year_coverage(value_bytes: bytes, year_range: tuple[int, int]) -> boo
     return required_years.issubset(years_present)
 
 
+def _process_batch_for_frequencies(
+        batch: List[Tuple[bytes, bytes]],
+        track_genre: bool,
+        spell_check: bool,
+        spell_check_language: str,
+        year_range: Optional[Tuple[int, int]],
+        always_include: Optional[set[bytes]],
+) -> Tuple[Counter, Optional[defaultdict]]:
+    """Process a batch of sentences and count token frequencies.
+
+    Returns:
+        (token_occurrences, token_year_sets) where token_year_sets is None if no year_range
+    """
+    spell_checker = _create_spell_checker(spell_check_language) if spell_check else None
+
+    if year_range is not None:
+        token_year_sets = defaultdict(set)
+        token_occurrences = Counter()
+        years_in_corpus = set()
+    else:
+        token_occurrences = Counter()
+        token_year_sets = None
+        years_in_corpus = None
+
+    for k, v in batch:
+        # Extract tokens from the sentence key
+        tokens = _extract_tokens_from_key(k, track_genre=track_genre)
+
+        # Count occurrences for this sentence
+        try:
+            if year_range is not None:
+                # Extract year from key to track year coverage
+                offset = 2 if track_genre else 0
+                if len(k) < offset + 4:
+                    continue
+                year = struct.unpack('>I', k[offset:offset+4])[0]
+
+                # Count only occurrences within the year range
+                occurrences = _total_occurrences_in_range(k, v, year_range, track_genre)
+                # Skip if no occurrences in range (year outside range)
+                if occurrences == 0:
+                    continue
+            else:
+                # No year range filter, count all occurrences
+                occurrences = _total_occurrences(v)
+                year = None
+        except Exception:
+            continue
+
+        # Add each token's occurrences to counter
+        for token in tokens:
+            # Skip UNK tokens
+            if token == b'<UNK>':
+                continue
+
+            # Apply spell check filter if enabled (but bypass for always_include tokens)
+            if spell_check and (always_include is None or token not in always_include):
+                word_str = token.decode(DECODING, "replace")
+                if not _is_correctly_spelled(word_str, spell_checker):
+                    continue
+
+            if year_range is not None:
+                # Track which years this token appears in
+                token_year_sets[token].add(year)
+                token_occurrences[token] += occurrences
+                years_in_corpus.add(year)
+            else:
+                token_occurrences[token] += occurrences
+
+    # Return year sets data if year_range is specified
+    if year_range is not None:
+        return token_occurrences, (token_year_sets, years_in_corpus)
+    else:
+        return token_occurrences, None
+
+
 def _build_token_frequencies(
         db_or_path: Union[str, Path, "rs.DB"],
         *,
@@ -279,6 +363,9 @@ def _build_token_frequencies(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        always_include: Optional[set[bytes]] = None,
+        workers: int = 1,
+        batch_size: int = 50_000,
 ) -> Counter:
     """Build frequency counter for all tokens in the Davies database.
 
@@ -288,101 +375,121 @@ def _build_token_frequencies(
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include tokens that appear in ALL years in range
+        always_include: Optional set of token bytes to always include, bypassing spell check filter
+        workers: Number of parallel workers (default: 1 for sequential)
+        batch_size: Number of sentences per batch for parallel processing
 
     Returns:
         Counter mapping token bytes to total occurrence counts
     """
-    spell_checker = _create_spell_checker(spell_check_language) if spell_check else None
+    # Warn if spell checking was requested but enchant is unavailable
+    if spell_check:
+        spell_checker = _create_spell_checker(spell_check_language)
+        if spell_checker is None:
+            import logging
+            logging.warning(
+                "Spell checking was requested but enchant library is not available. "
+                "All words will be included regardless of spelling. "
+                "Install enchant C library to enable spell checking."
+            )
 
-    # Warn if spell checking was requested but is unavailable
-    if spell_check and spell_checker is None:
-        import logging
-        logging.warning(
-            "Spell checking was requested but enchant library is not available. "
-            "All words will be included regardless of spelling. "
-            "Install enchant C library to enable spell checking."
-        )
-
-    # If year_range specified, track which years each token appears in
-    if year_range is not None:
-        token_year_sets = defaultdict(set)  # token -> set of years it appears in
-        token_occurrences = Counter()  # token -> total occurrences (in range)
-        years_in_corpus = set()  # actual years present in the database
-    else:
-        token_occurrences = Counter()
+    # Read all data into batches
+    batches: List[List[Tuple[bytes, bytes]]] = []
+    current_batch: List[Tuple[bytes, bytes]] = []
 
     with _db_from(db_or_path) as db:
-        # Count total sentences for progress bar
         print("Scanning database...")
-        # Note: _iter_db_items creates a fresh iterator each time it's called
-        total_sentences = sum(1 for _ in _iter_db_items(db))
+        for k, v in _iter_db_items(db):
+            current_batch.append((k, v))
+            if len(current_batch) >= batch_size:
+                batches.append(current_batch)
+                current_batch = []
 
-        print(f"Found {total_sentences:,} sentences")
+        if current_batch:
+            batches.append(current_batch)
 
-        if year_range is not None:
-            print("Detecting years present in corpus...")
+    total_sentences = sum(len(batch) for batch in batches)
+    print(f"Found {total_sentences:,} sentences in {len(batches)} batches")
 
-        tokens_seen = 0
-        sentences_processed = 0
+    if year_range is not None:
+        print("Detecting years present in corpus...")
+
+    # Process batches in parallel
+    if workers > 1:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        # Aggregate results from workers
+        token_occurrences = Counter()
+        token_year_sets = defaultdict(set) if year_range is not None else None
+        years_in_corpus = set() if year_range is not None else None
+
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            with tqdm(
+                total=len(batches),
+                desc="Building token frequencies",
+                unit="batches",
+                ncols=100,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+            ) as pbar:
+                # Submit all batches
+                futures = {
+                    executor.submit(
+                        _process_batch_for_frequencies,
+                        batch,
+                        track_genre,
+                        spell_check,
+                        spell_check_language,
+                        year_range,
+                        always_include
+                    ): batch_id
+                    for batch_id, batch in enumerate(batches)
+                }
+
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    try:
+                        batch_occurrences, year_data = future.result()
+
+                        # Merge token occurrences
+                        token_occurrences.update(batch_occurrences)
+
+                        # Merge year data if tracking years
+                        if year_range is not None and year_data is not None:
+                            batch_year_sets, batch_years = year_data
+                            for token, years in batch_year_sets.items():
+                                token_year_sets[token].update(years)
+                            years_in_corpus.update(batch_years)
+                    except Exception as e:
+                        print(f"\nError processing batch: {e}")
+                    finally:
+                        pbar.update(1)
+    else:
+        # Sequential processing (workers=1)
+        token_occurrences = Counter()
+        token_year_sets = defaultdict(set) if year_range is not None else None
+        years_in_corpus = set() if year_range is not None else None
 
         with tqdm(
-            total=total_sentences,
+            total=len(batches),
             desc="Building token frequencies",
-            unit="sentences",
+            unit="batches",
             ncols=100,
             bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
         ) as pbar:
-            # Create a fresh iterator for the second pass
-            for k, v in _iter_db_items(db):
-                sentences_processed += 1
+            for batch in batches:
+                batch_occurrences, year_data = _process_batch_for_frequencies(
+                    batch, track_genre, spell_check, spell_check_language, year_range, always_include
+                )
 
-                # Extract tokens from the sentence key
-                tokens = _extract_tokens_from_key(k, track_genre=track_genre)
+                # Merge token occurrences
+                token_occurrences.update(batch_occurrences)
 
-                # Count occurrences for this sentence (only within year range if specified)
-                try:
-                    if year_range is not None:
-                        # Extract year from key to track year coverage
-                        offset = 2 if track_genre else 0
-                        if len(k) < offset + 4:
-                            pbar.update(1)
-                            continue
-                        year = struct.unpack('>I', k[offset:offset+4])[0]
-
-                        # Count only occurrences within the year range
-                        occurrences = _total_occurrences_in_range(k, v, year_range, track_genre)
-                        # Skip if no occurrences in range (year outside range)
-                        if occurrences == 0:
-                            pbar.update(1)
-                            continue
-                    else:
-                        # No year range filter, count all occurrences
-                        occurrences = _total_occurrences(v)
-                        year = None
-                except Exception as e:
-                    pbar.update(1)
-                    continue
-
-                # Add each token's occurrences to counter
-                for token in tokens:
-                    # Skip UNK tokens
-                    if token == b'<UNK>':
-                        continue
-
-                    # Apply spell check filter if enabled
-                    if spell_check:
-                        word_str = token.decode(DECODING, "replace")
-                        if not _is_correctly_spelled(word_str, spell_checker):
-                            continue
-
-                    if year_range is not None:
-                        # Track which years this token appears in
-                        token_year_sets[token].add(year)
-                        token_occurrences[token] += occurrences
-                        years_in_corpus.add(year)
-                    else:
-                        token_occurrences[token] += occurrences
-                    tokens_seen += 1
+                # Merge year data if tracking years
+                if year_range is not None and year_data is not None:
+                    batch_year_sets, batch_years = year_data
+                    for token, years in batch_year_sets.items():
+                        token_year_sets[token].update(years)
+                    years_in_corpus.update(batch_years)
 
                 pbar.update(1)
 
@@ -425,6 +532,9 @@ def write_whitelist(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        always_include: Optional[set[bytes]] = None,
+        workers: int = 1,
+        batch_size: int = 50_000,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc).
@@ -438,6 +548,10 @@ def write_whitelist(
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include tokens from sentences present in all years
+        always_include: Optional set of token bytes to always include in whitelist,
+                       regardless of frequency (e.g., {b"working-class", b"nuclear"})
+        workers: Number of parallel workers for frequency counting (default: 1 for sequential)
+        batch_size: Number of sentences per batch for parallel processing
 
     Returns:
         Resolved path to the created whitelist file
@@ -453,13 +567,40 @@ def write_whitelist(
         spell_check=spell_check,
         spell_check_language=spell_check_language,
         year_range=year_range,
+        always_include=always_include,
+        workers=workers,
+        batch_size=batch_size,
     )
 
     print(f"\nRanking {len(counter):,} unique tokens...")
+
+    # Add always_include tokens to counter if not already present
+    # (this should rarely happen now that spell check bypasses them, but keep as safety net)
+    if always_include:
+        added_count = 0
+        for token in always_include:
+            if token not in counter:
+                # Add with count of 0 (will be sorted to bottom, but still included)
+                counter[token] = 0
+                added_count += 1
+        if added_count > 0:
+            print(f"Added {added_count} always_include tokens that were not found in corpus")
+
     # Get most common tokens
     if top is not None:
         items = counter.most_common(top)
-        print(f"Selected top {top:,} tokens")
+
+        # Ensure always_include tokens are included even if they didn't make top N
+        if always_include:
+            included_tokens = {token for token, _ in items}
+            missing_tokens = always_include - included_tokens
+            if missing_tokens:
+                # Add missing always_include tokens at the end
+                for token in missing_tokens:
+                    items.append((token, counter.get(token, 0)))
+                print(f"Added {len(missing_tokens)} always_include tokens that didn't make top {top}")
+
+        print(f"Selected top {top:,} tokens (+ {len(missing_tokens) if always_include and missing_tokens else 0} always_include)")
     else:
         items = counter.most_common()
         print(f"Writing all {len(items):,} tokens")

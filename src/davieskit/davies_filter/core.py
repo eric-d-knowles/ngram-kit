@@ -270,6 +270,7 @@ def filter_davies_corpus(
     apply_lemmatization: Optional[bool] = None,
     min_len: Optional[int] = None,
     whitelist: Optional[Set[bytes]] = None,
+    always_include: Optional[Set[str]] = None,
     # Processing parameters
     workers: Optional[int] = None,
     batch_size: int = 50_000,
@@ -281,6 +282,8 @@ def filter_davies_corpus(
     whitelist_size: int = 10_000,
     whitelist_year_range: Optional[Tuple[int, int]] = None,
     whitelist_spell_check: bool = True,
+    whitelist_workers: Optional[int] = None,
+    whitelist_batch_size: int = 50_000,
     apply_whitelist: bool = False,
 ) -> None:
     """
@@ -301,6 +304,8 @@ def filter_davies_corpus(
         apply_lemmatization: Apply lemmatization (used if filter_config not provided)
         min_len: Minimum token length (used if filter_config not provided)
         whitelist: Set of allowed tokens (bytes); tokens not in whitelist become <UNK>
+        always_include: Set of tokens (strings) to always preserve in whitelist mode,
+                       regardless of whether they're in the whitelist (e.g., {"working-class", "nuclear"})
         workers: Number of parallel workers (default: cpu_count - 1)
         batch_size: Number of sentences per batch for workers
         compact_after: If True, perform full compaction after filtering
@@ -310,6 +315,8 @@ def filter_davies_corpus(
         whitelist_size: Number of top tokens to include in whitelist
         whitelist_year_range: Optional (start_year, end_year) range for whitelist creation
         whitelist_spell_check: If True, filter out misspelled words from whitelist
+        whitelist_workers: Number of parallel workers for whitelist building (default: same as workers)
+        whitelist_batch_size: Batch size for whitelist building (default: 50,000)
         apply_whitelist: If True, apply whitelist after creation (requires create_whitelist=True)
 
     Workflow:
@@ -363,11 +370,16 @@ def filter_davies_corpus(
         cpu_count = os.cpu_count() or 4
         workers = max(1, cpu_count - 1)
 
+    # Convert always_include to bytes if provided
+    always_include_bytes = None
+    if always_include is not None:
+        always_include_bytes = {token.encode('utf-8') for token in always_include}
+
     # Construct FilterConfig if not provided
     if filter_config is None:
         # If filter parameters provided, use them; otherwise use defaults
         if any(param is not None for param in [stop_set, lemma_gen, lowercase, alpha_only,
-                                                 filter_short, filter_stops, apply_lemmatization, min_len, whitelist]):
+                                                 filter_short, filter_stops, apply_lemmatization, min_len, whitelist, always_include_bytes]):
             kwargs = {}
             if stop_set is not None:
                 kwargs['stop_set'] = stop_set
@@ -387,6 +399,8 @@ def filter_davies_corpus(
                 kwargs['min_len'] = min_len
             if whitelist is not None:
                 kwargs['whitelist'] = whitelist
+            if always_include_bytes is not None:
+                kwargs['always_include'] = always_include_bytes
             filter_config = FilterConfig(**kwargs)
         else:
             filter_config = FilterConfig()
@@ -454,6 +468,10 @@ def filter_davies_corpus(
     if filter_config.whitelist is not None:
         filter_config_dict['whitelist'] = filter_config.whitelist
 
+    # Include always_include if it's set
+    if filter_config.always_include is not None:
+        filter_config_dict['always_include'] = filter_config.always_include
+
     # Open destination database and run filtering workers
     with open_db(dst_db_path, mode="w", profile="write:packed24", create_if_missing=True) as dst_db:
         # Run workers in separate function that returns cleanly
@@ -480,6 +498,9 @@ def filter_davies_corpus(
         print()
         sys.stdout.flush()
 
+        # Determine whitelist worker count
+        wl_workers = whitelist_workers if whitelist_workers is not None else workers
+
         # Call write_whitelist to create the whitelist file
         write_whitelist(
             db_or_path=dst_db_path,
@@ -488,6 +509,9 @@ def filter_davies_corpus(
             track_genre=track_genre,
             spell_check=whitelist_spell_check,
             year_range=whitelist_year_range,
+            always_include=always_include_bytes,
+            workers=wl_workers,
+            batch_size=whitelist_batch_size,
         )
 
         sys.stdout.flush()

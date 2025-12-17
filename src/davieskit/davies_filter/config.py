@@ -24,6 +24,7 @@ class FilterConfig:
     stop_set: Optional[Set[str]] = None
     lemma_gen: Any = None  # Lemmatizer instance
     whitelist: Optional[Set[bytes]] = None  # Whitelist of allowed tokens (bytes)
+    always_include: Optional[Set[bytes]] = None  # Tokens to always preserve (e.g., b"working-class")
 
 
 @dataclass(frozen=True)

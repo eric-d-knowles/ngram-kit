@@ -50,19 +50,33 @@ def process_model(args):
     model.save(output_path)
 
 
-def normalize_and_align_vectors(ngram_size, proj_dir, dir_suffix, anchor_year,
-                                workers=os.cpu_count()):
+def normalize_and_align_vectors(proj_dir, dir_suffix, anchor_year,
+                                ngram_size=None, workers=os.cpu_count()):
     """
     Normalize and align Word2Vec models in the given project directory.
+
+    Args:
+        proj_dir: Project directory path
+        dir_suffix: Directory suffix (e.g., 'final', 'test')
+        anchor_year: Year to use as anchor for alignment
+        ngram_size: Optional. If provided, uses ngram structure (e.g., '5gram_files/models_{suffix}').
+                    If None, uses flat structure (e.g., 'models_{suffix}')
+        workers: Number of parallel workers
     """
     start_time = datetime.now()
-    model_dir = os.path.join(
-        proj_dir, f'{ngram_size}gram_files/models_{dir_suffix}'
-    )
+
+    # Construct model directory based on whether ngram_size is provided
+    if ngram_size is not None:
+        model_dir = os.path.join(proj_dir, f'{ngram_size}gram_files/models_{dir_suffix}')
+    else:
+        model_dir = os.path.join(proj_dir, f'models_{dir_suffix}')
+
+    if not os.path.exists(model_dir):
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
 
     model_paths = get_model_paths(model_dir)
     if not model_paths:
-        raise FileNotFoundError("No .kv models found in the specified directory.")
+        raise FileNotFoundError(f"No .kv models found in {model_dir}")
 
     # Load the anchor model
     anchor_model_path = next((p for y, p in model_paths if y == anchor_year), None)

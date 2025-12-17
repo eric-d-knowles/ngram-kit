@@ -101,7 +101,10 @@ def track_yearly_drift(
         if smooth:
             smoothed = gaussian_filter1d(drift, sigma=sigma)
             ax.plot(years, smoothed, linestyle='--', color='red', linewidth=2, label=f"Smoothed (σ={sigma})")
-            derivative = savgol_filter(smoothed, window_length=11, polyorder=3, deriv=1, delta=np.mean(np.diff(years)))
+            # Ensure window_length is smaller than data size and odd
+            window_length = min(11, len(smoothed) if len(smoothed) % 2 == 1 else len(smoothed) - 1)
+            polyorder = min(3, window_length - 1)
+            derivative = savgol_filter(smoothed, window_length=window_length, polyorder=polyorder, deriv=1, delta=np.mean(np.diff(years)))
 
             ax2 = ax.twinx()
             ax2.plot(years, derivative, linestyle='-', color='green', linewidth=1, label="First Derivative")

@@ -5,7 +5,7 @@
     "distutils": {
         "depends": [],
         "include_dirs": [
-            "/opt/miniforge/lib/python3.11/site-packages/numpy/core/include"
+            "/state/partition1/job-377812/pip-build-env-ferwludl/overlay/lib/python3.11/site-packages/numpy/_core/include"
         ],
         "name": "ngramkit.ngram_filter.filters.core_cy",
         "sources": [

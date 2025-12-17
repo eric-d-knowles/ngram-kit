@@ -67,6 +67,7 @@ cpdef bytes process_sentence(
     object stop_set = None,
     object lemma_gen = None,
     object whitelist = None,
+    object always_include = None,
     bytearray outbuf = None
 ):
     """
@@ -78,6 +79,7 @@ cpdef bytes process_sentence(
     Unlike ngram processing, Davies sentences have no POS tags embedded.
 
     If whitelist is provided, tokens not in whitelist become <UNK> (checked after lowercasing).
+    If always_include is provided, those tokens are preserved even if not in whitelist.
     """
     cdef Py_ssize_t N = sentence.__len__()
     if N == 0:
@@ -90,6 +92,7 @@ cpdef bytes process_sentence(
     cdef bint do_shorts = opt_shorts
     cdef bint do_stops  = (opt_stops and stop_set is not None)
     cdef bint do_whitelist = (whitelist is not None)
+    cdef bint do_always_include = (always_include is not None)
 
     # prep output buffer
     if outbuf is None:
@@ -137,11 +140,16 @@ cpdef bytes process_sentence(
         # Whitelist filter (after lowercasing, before other filters)
         if not is_unk and do_whitelist:
             if tok_b not in whitelist:
-                is_unk = 1
+                # Check if it's in always_include before marking as UNK
+                if not do_always_include or tok_b not in always_include:
+                    is_unk = 1
 
-        # Alpha filter
+        # Alpha filter (skip for always_include tokens)
         if do_alpha:
-            if not _is_ascii_alpha_bytes(tok_b):
+            # Skip alpha check if token is in always_include set
+            if do_always_include and tok_b in always_include:
+                pass  # Token is protected, skip alpha filter
+            elif not _is_ascii_alpha_bytes(tok_b):
                 # Contains non-ASCII bytes, decode and check with Unicode isalpha()
                 try:
                     tok_s = _decode_token(tok_b)
@@ -151,20 +159,29 @@ cpdef bytes process_sentence(
                     # Decoding failed, mark as invalid
                     is_unk = 1
 
-        # Length filter
-        if not is_unk and do_shorts and tok_b.__len__() < min_len:
-            is_unk = 1
+        # Length filter (skip for always_include tokens)
+        if not is_unk and do_shorts:
+            if do_always_include and tok_b in always_include:
+                pass  # Token is protected, skip length filter
+            elif tok_b.__len__() < min_len:
+                is_unk = 1
 
-        # Stopword filter
-        elif not is_unk and do_stops and tok_b in stop_set:
-            is_unk = 1
+        # Stopword filter (skip for always_include tokens)
+        if not is_unk and do_stops:
+            if do_always_include and tok_b in always_include:
+                pass  # Token is protected, skip stopword filter
+            elif tok_b in stop_set:
+                is_unk = 1
 
-        # Lemmatization (after all filters pass)
+        # Lemmatization (after all filters pass, but skip for always_include tokens)
         if not is_unk and do_lemmas:
-            tok_s = _decode_token(tok_b)
-            # Default to NOUN for Davies data (no POS tags)
-            res = lemma_gen.lemmatize(tok_s, pos="NOUN")
-            tok_b = _encode_token(<str> res)
+            if do_always_include and tok_b in always_include:
+                pass  # Token is protected, skip lemmatization
+            else:
+                tok_s = _decode_token(tok_b)
+                # Default to NOUN for Davies data (no POS tags)
+                res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+                tok_b = _encode_token(<str> res)
 
         # Write token
         if is_unk:

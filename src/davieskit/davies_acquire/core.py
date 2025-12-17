@@ -34,6 +34,7 @@ def process_single_file(
     year: int,
     worker_id: int = 0,
     track_genre: bool = True,
+    combined_bigrams: Optional[set] = None,
 ) -> Tuple[str, int, int, Dict, Dict[str, int]]:
     """
     Process a single text file: read, tokenize, accumulate sentence counts.
@@ -46,6 +47,8 @@ def process_single_file(
         year: Year for this file
         worker_id: Worker identifier for process naming
         track_genre: If True, include genre in keys
+        combined_bigrams: Optional set of bigrams to combine with hyphens
+                         (e.g., {"working class", "middle class"})
 
     Returns:
         Tuple of (filename, sentence_count, error_count, sentence_data, genre_stats)
@@ -71,8 +74,8 @@ def process_single_file(
         # Read documents from zip file with genre
         for doc_year, text, genre in read_text_file_with_genre(zip_path, year):
             try:
-                # Tokenize into sentences
-                for tokens in tokenize_sentences(text):
+                # Tokenize into sentences (with optional bigram combination)
+                for tokens in tokenize_sentences(text, combined_bigrams=combined_bigrams):
                     sentence_str = ' '.join(tokens)
 
                     if track_genre:
@@ -153,6 +156,7 @@ def ingest_davies_corpus(
     write_batch_size: int = 100_000,
     compact_after: bool = False,
     track_genre: bool = True,
+    combined_bigrams: Optional[set] = None,
 ) -> None:
     """
     Main pipeline: read Davies corpus text files and ingest into RocksDB.
@@ -172,6 +176,9 @@ def ingest_davies_corpus(
         write_batch_size: Number of sentences per batch write
         compact_after: If True, perform full compaction after ingestion
         track_genre: If True, include genre in keys (default: True)
+        combined_bigrams: Optional set of bigrams to combine with hyphens during tokenization
+                         (e.g., {"working class", "middle class"}). Consecutive tokens matching
+                         these bigrams will be replaced with hyphenated versions (e.g., "working-class")
     """
     # Set main process title if available
     if _setproctitle is not None:
@@ -280,7 +287,7 @@ def ingest_davies_corpus(
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 # Submit all files for processing with worker IDs
                 future_to_file = {
-                    executor.submit(process_single_file, text_file, year, worker_id, track_genre): (text_file, year)
+                    executor.submit(process_single_file, text_file, year, worker_id, track_genre, combined_bigrams): (text_file, year)
                     for worker_id, (text_file, year) in enumerate(file_year_pairs)
                 }
 

@@ -65,6 +65,7 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
             stop_set=stop_set_b,
             lemma_gen=cfg.lemma_gen,
             whitelist=cfg.whitelist,
+            always_include=cfg.always_include,
             outbuf=outbuf,
         )
         return out or None
